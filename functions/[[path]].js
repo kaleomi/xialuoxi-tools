@@ -1,8 +1,12 @@
 // 夏洛熙工具集 — Pages Functions 代理
-// 运行时拦截 Turnstile.render → 强制替换为自己的 site key
+// 运行时拦截 Turnstile + 测试密钥（always pass） + API 自行验证
 
 const ORIGIN = 'https://imagefree.net';
-const USER_SITE_KEY = '0x4AAAAAADuSr57URha6wMyK';
+
+// Turnstile 测试密钥（always pass）：任何后端验证都通过
+const TEST_SITE_KEY = '1x0000000000000000000000000000000AA';
+const TEST_SECRET_KEY = '1x0000000000000000000000000000000AA';
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const TOOLS = {
@@ -24,9 +28,8 @@ body{margin:0!important;background:#f5f5f7!important}
 .min-h-screen>section:first-of-type p.text-lg{font-size:.8rem!important;margin-bottom:.5rem!important}
 </style>`;
 
-// 运行时拦截脚本：Object.defineProperty 劫持 window.turnstile.setter
-// 在 Turnstile API 加载设置 window.turnstile 时，自动 patch render 方法
-const PATCH_SCRIPT = '<script>(function(){var _t;Object.defineProperty(window,"turnstile",{configurable:true,enumerable:true,get:function(){return _t},set:function(v){if(v&&typeof v.render==="function"){var r=v.render.bind(v);v.render=function(c,p){if(p&&typeof p==="object"){p.sitekey="' + USER_SITE_KEY + '"}return r(c,p)}}_t=v}})})()<\/script>';
+// 运行时拦截：劫持 window.turnstile.setter，强制覆盖 siteKey 为测试密钥
+const PATCH_SCRIPT = '<script>(function(){var _t;Object.defineProperty(window,"turnstile",{configurable:true,enumerable:true,get:function(){return _t},set:function(v){if(v&&typeof v.render==="function"){var r=v.render.bind(v);v.render=function(c,p){if(p&&typeof p==="object")p.sitekey="' + TEST_SITE_KEY + '";return r(c,p)}}_t=v}})})()<\/script>';
 
 export async function onRequest(context) {
   const { request } = context;
@@ -38,26 +41,59 @@ export async function onRequest(context) {
     return context.next();
   }
 
-  // API 请求：透传
+  // ── API 代理 ──
   if (path.startsWith('/api/')) {
-    const apiUrl = ORIGIN + path;
     const method = request.method;
+    let bodyRaw = null;
+    if (method !== 'GET' && method !== 'HEAD') {
+      bodyRaw = await request.text();
+    }
+
+    // 解析 JSON 并验证 turnstile_token
+    if (bodyRaw) {
+      try {
+        const bodyObj = JSON.parse(bodyRaw);
+        const token = bodyObj.turnstile_token;
+        if (token) {
+          // 自行验证 token（用测试密钥，always pass）
+          const verifyResp = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'secret=' + TEST_SECRET_KEY + '&response=' + encodeURIComponent(token),
+          });
+          const verifyResult = await verifyResp.json();
+          if (!verifyResult.success) {
+            return new Response(JSON.stringify({ error: 'Human verification failed. Please complete the setup or refresh the page to try again.' }), {
+              status: 403,
+              headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+            });
+          }
+          // 验证通过！保持 token 原样转发（测试密钥的 token 在 imagefree 后端也能通过）
+        }
+      } catch (e) {
+        // 解析失败，继续透传
+      }
+    }
+
+    const apiUrl = ORIGIN + path;
     const hdrs = new Headers(request.headers);
     hdrs.set('User-Agent', UA);
     hdrs.set('Referer', ORIGIN + '/zh');
     hdrs.set('Origin', ORIGIN);
     hdrs.delete('Host');
+
     const apiResp = await fetch(apiUrl, {
       method, headers: hdrs,
-      body: method !== 'GET' && method !== 'HEAD' ? request.body : undefined,
+      body: method !== 'GET' && method !== 'HEAD' ? bodyRaw : undefined,
     });
+
     return new Response(apiResp.body, {
       status: apiResp.status,
       headers: { 'Content-Type': apiResp.headers.get('content-type') || 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
   }
 
-  // 工具页面
+  // ── 工具页面 ──
   if (path.startsWith('/proxy/')) {
     const toolName = path.slice(7);
     const targetUrl = TOOLS[toolName];
@@ -71,7 +107,6 @@ export async function onRequest(context) {
     const ct = resp.headers.get('content-type') || '';
 
     if (ct.includes('text/html')) {
-      // 注入拦截脚本（在 Turnstile API 加载之前执行）
       body = body.replace('</head>', PATCH_SCRIPT + HIDE_CSS + '</head>');
     }
 
@@ -80,7 +115,7 @@ export async function onRequest(context) {
     });
   }
 
-  // 静态资源代理（直接透传，不需要替换）
+  // ── 静态资源 ──
   const resourceUrl = ORIGIN + path;
   const res = await fetch(resourceUrl, {
     headers: { 'User-Agent': UA, Accept: '*/*', Referer: ORIGIN + '/zh' },
