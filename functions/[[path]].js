@@ -40,9 +40,9 @@ export async function onRequest(context) {
   const { params } = context;
   const path = params.path || '';
 
-  // 根路径 → 404，让 Pages 静态文件（index.html）接管
+  // 根路径 → 穿透到 Pages 静态文件服务（自动返回 index.html）
   if (path === '') {
-    return new Response(null, { status: 404 });
+    return context.next();
   }
 
   // ── 1. 工具页面代理：/proxy/t2i, /proxy/rmBg 等 ──
