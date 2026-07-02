@@ -1,9 +1,10 @@
 // 夏洛熙工具集 — Pages Functions 代理
-// 拦截所有非静态文件请求，代理到 imagefree.net + 注入 CSS + 替换 Turnstile Key
+// 拦截所有请求，代理到 imagefree.net + 文本替换 Turnstile Key + 注入 CSS
 
 const ORIGIN = 'https://imagefree.net';
-
 const USER_SITE_KEY = '0x4AAAAAADuSr57URha6wMyK';
+const ORIG_SITE_KEY = '0x4AAAAAACE-XLGoQUckKKm_';
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const TOOLS = {
@@ -30,7 +31,7 @@ export async function onRequest(context) {
   const url = new URL(request.url);
   const path = url.pathname;
 
-  // ── 首页：让 Pages 静态文件服务处理 ──
+  // 首页：让 Pages 静态文件服务处理
   if (path === '/' || path === '/index.html') {
     return context.next();
   }
@@ -50,26 +51,23 @@ export async function onRequest(context) {
       },
     });
 
+    let body = await resp.text();
     const ct = resp.headers.get('content-type') || '';
-    if (!ct.includes('text/html')) {
-      return new Response(resp.body, {
-        status: resp.status,
-        headers: { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*' },
-      });
+
+    // 替换 Turnstile Site Key（在 HTML 和 JS 中都生效）
+    body = body.replaceAll(ORIG_SITE_KEY, USER_SITE_KEY);
+
+    // 注入 CSS 隐藏导航/广告（仅 HTML）
+    if (ct.includes('text/html')) {
+      body = body.replace('</head>', HIDE_CSS + '</head>');
     }
 
-    // HTMLRewriter：注入 CSS + 替换 Turnstile Key
-    return new HTMLRewriter()
-      .on('head', { element(el) { el.append(HIDE_CSS, { html: true }); } })
-      .on('[data-sitekey]', {
-        element(el) {
-          const key = el.getAttribute('data-sitekey');
-          if (key && (key.startsWith('0x4') || key.startsWith('0x3'))) {
-            el.setAttribute('data-sitekey', USER_SITE_KEY);
-          }
-        },
-      })
-      .transform(resp);
+    return new Response(body, {
+      headers: {
+        'Content-Type': ct.includes('text/html') ? 'text/html; charset=utf-8' : ct,
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
   }
 
   // ── 静态资源（_next/static, favicon 等）直接从 imagefree.net 代理 ──
@@ -82,10 +80,24 @@ export async function onRequest(context) {
     },
   });
 
+  const ct = res.headers.get('content-type') || '';
+
+  // 如果是 JS 文件，也要替换 Turnstile Key
+  if (ct.includes('javascript') || ct.includes('ecmascript') || path.endsWith('.js')) {
+    let jsBody = await res.text();
+    jsBody = jsBody.replaceAll(ORIG_SITE_KEY, USER_SITE_KEY);
+    return new Response(jsBody, {
+      headers: {
+        'Content-Type': ct,
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  }
+
   return new Response(res.body, {
     status: res.status,
     headers: {
-      'Content-Type': res.headers.get('content-type') || 'application/octet-stream',
+      'Content-Type': ct,
       'Access-Control-Allow-Origin': '*',
     },
   });
