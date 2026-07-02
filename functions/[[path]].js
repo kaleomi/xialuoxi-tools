@@ -1,11 +1,12 @@
 // 夏洛熙工具集 — Pages Functions 代理
-// 运行时拦截 Turnstile + 测试密钥（always pass） + API 自行验证
+// 暴力替换所有响应文本中的 site key + 注入 CSS + API 自行验证
 
 const ORIGIN = 'https://imagefree.net';
 
-// Turnstile 测试密钥（always pass）：任何后端验证都通过
-const TEST_SITE_KEY = '1x0000000000000000000000000000000AA';
-const TEST_SECRET_KEY = '1x0000000000000000000000000000000AA';
+// 测试密钥（always pass）：前后端通用，任何域名可用
+const KEY_TEST = '1x0000000000000000000000000000000AA';
+// 原站使用的 site key
+const KEY_ORIG = '0x4AAAAAACE-XLGoQUckKKm_';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -28,9 +29,6 @@ body{margin:0!important;background:#f5f5f7!important}
 .min-h-screen>section:first-of-type p.text-lg{font-size:.8rem!important;margin-bottom:.5rem!important}
 </style>`;
 
-// 运行时拦截：劫持 window.turnstile.setter，强制覆盖 siteKey 为测试密钥
-const PATCH_SCRIPT = '<script>(function(){var _t;Object.defineProperty(window,"turnstile",{configurable:true,enumerable:true,get:function(){return _t},set:function(v){if(v&&typeof v.render==="function"){var r=v.render.bind(v);v.render=function(c,p){if(p&&typeof p==="object")p.sitekey="' + TEST_SITE_KEY + '";return r(c,p)}}_t=v}})})()<\/script>';
-
 export async function onRequest(context) {
   const { request } = context;
   const url = new URL(request.url);
@@ -49,17 +47,16 @@ export async function onRequest(context) {
       bodyRaw = await request.text();
     }
 
-    // 解析 JSON 并验证 turnstile_token
+    // 验证 turnstile_token（如果存在）
     if (bodyRaw) {
       try {
         const bodyObj = JSON.parse(bodyRaw);
         const token = bodyObj.turnstile_token;
         if (token) {
-          // 自行验证 token（用测试密钥，always pass）
           const verifyResp = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'secret=' + TEST_SECRET_KEY + '&response=' + encodeURIComponent(token),
+            body: 'secret=' + KEY_TEST + '&response=' + encodeURIComponent(token),
           });
           const verifyResult = await verifyResp.json();
           if (!verifyResult.success) {
@@ -68,11 +65,8 @@ export async function onRequest(context) {
               headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
             });
           }
-          // 验证通过！保持 token 原样转发（测试密钥的 token 在 imagefree 后端也能通过）
         }
-      } catch (e) {
-        // 解析失败，继续透传
-      }
+      } catch (e) {}
     }
 
     const apiUrl = ORIGIN + path;
@@ -82,10 +76,7 @@ export async function onRequest(context) {
     hdrs.set('Origin', ORIGIN);
     hdrs.delete('Host');
 
-    const apiResp = await fetch(apiUrl, {
-      method, headers: hdrs,
-      body: method !== 'GET' && method !== 'HEAD' ? bodyRaw : undefined,
-    });
+    const apiResp = await fetch(apiUrl, { method, headers: hdrs, body: method !== 'GET' && method !== 'HEAD' ? bodyRaw : undefined });
 
     return new Response(apiResp.body, {
       status: apiResp.status,
@@ -103,11 +94,15 @@ export async function onRequest(context) {
       headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'zh-CN,zh;q=0.9', Referer: ORIGIN + '/zh' },
     });
 
-    let body = await resp.text();
     const ct = resp.headers.get('content-type') || '';
+    let body = await resp.text();
 
+    // 替换 site key（暴力替换所有出现位置）
+    body = body.replaceAll(KEY_ORIG, KEY_TEST);
+
+    // 注入隐藏 CSS
     if (ct.includes('text/html')) {
-      body = body.replace('</head>', PATCH_SCRIPT + HIDE_CSS + '</head>');
+      body = body.replace('</head>', HIDE_CSS + '</head>');
     }
 
     return new Response(body, {
@@ -115,12 +110,20 @@ export async function onRequest(context) {
     });
   }
 
-  // ── 静态资源 ──
+  // ── 静态资源（JS、CSS 等也替换 key）──
   const resourceUrl = ORIGIN + path;
   const res = await fetch(resourceUrl, {
     headers: { 'User-Agent': UA, Accept: '*/*', Referer: ORIGIN + '/zh' },
   });
   const ct = res.headers.get('content-type') || '';
+
+  // 所有文本类型响应都替换 site key
+  if (ct.includes('text/') || ct.includes('javascript') || ct.includes('ecmascript')) {
+    let textBody = await res.text();
+    textBody = textBody.replaceAll(KEY_ORIG, KEY_TEST);
+    return new Response(textBody, { headers: { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*' } });
+  }
+
   return new Response(res.body, {
     status: res.status,
     headers: { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*' },
