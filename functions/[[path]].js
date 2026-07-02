@@ -1,9 +1,9 @@
 // 夏洛熙工具集 — Pages Functions 代理
-// 暴力替换所有响应文本中的 site key + 注入 CSS + API 自行验证
+// 双重保障：暴力替换文本中的 site key + 运行时轮询拦截 turnstile.render
 
 const ORIGIN = 'https://imagefree.net';
 
-// 测试密钥（always pass）：前后端通用，任何域名可用
+// 测试密钥（always pass）：任何域名/任何后端验证都通过
 const KEY_TEST = '1x0000000000000000000000000000000AA';
 // 原站使用的 site key
 const KEY_ORIG = '0x4AAAAAACE-XLGoQUckKKm_';
@@ -29,6 +29,9 @@ body{margin:0!important;background:#f5f5f7!important}
 .min-h-screen>section:first-of-type p.text-lg{font-size:.8rem!important;margin-bottom:.5rem!important}
 </style>`;
 
+// 运行时轮询拦截：每1ms检查 turnstile.render 是否可用，然后强制替换 siteKey
+const POLL_SCRIPT = '<script>(function(){var i=setInterval(function(){if(window.turnstile&&typeof window.turnstile.render==="function"){clearInterval(i);var r=window.turnstile.render.bind(window.turnstile);window.turnstile.render=function(c,p){if(p&&typeof p==="object")p.sitekey="' + KEY_TEST + '";return r(c,p)}}},1)})()<\/script>';
+
 export async function onRequest(context) {
   const { request } = context;
   const url = new URL(request.url);
@@ -47,7 +50,6 @@ export async function onRequest(context) {
       bodyRaw = await request.text();
     }
 
-    // 验证 turnstile_token（如果存在）
     if (bodyRaw) {
       try {
         const bodyObj = JSON.parse(bodyRaw);
@@ -97,27 +99,24 @@ export async function onRequest(context) {
     const ct = resp.headers.get('content-type') || '';
     let body = await resp.text();
 
-    // 替换 site key（暴力替换所有出现位置）
+    // ① 暴力替换 site key（HTML + 内联 JS）
     body = body.replaceAll(KEY_ORIG, KEY_TEST);
 
-    // 注入隐藏 CSS
-    if (ct.includes('text/html')) {
-      body = body.replace('</head>', HIDE_CSS + '</head>');
-    }
+    // ② 注入轮询拦截脚本（在 Turnstile API 加载前生效）
+    body = body.replace('</head>', HIDE_CSS + POLL_SCRIPT + '</head>');
 
     return new Response(body, {
       headers: { 'Content-Type': ct.includes('text/html') ? 'text/html; charset=utf-8' : ct, 'Access-Control-Allow-Origin': '*' },
     });
   }
 
-  // ── 静态资源（JS、CSS 等也替换 key）──
+  // ── 静态资源（JS/CSS 等文本资源）──
   const resourceUrl = ORIGIN + path;
   const res = await fetch(resourceUrl, {
     headers: { 'User-Agent': UA, Accept: '*/*', Referer: ORIGIN + '/zh' },
   });
   const ct = res.headers.get('content-type') || '';
 
-  // 所有文本类型响应都替换 site key
   if (ct.includes('text/') || ct.includes('javascript') || ct.includes('ecmascript')) {
     let textBody = await res.text();
     textBody = textBody.replaceAll(KEY_ORIG, KEY_TEST);
