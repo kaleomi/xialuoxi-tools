@@ -1,9 +1,10 @@
 // 夏洛熙工具集 — Pages Functions 代理
-// 拦截所有请求，代理到 imagefree.net + 文本替换 Turnstile Key + 注入 CSS
-// 使用 Cloudflare 测试 site key（always pass），绕过后端 secret key 不匹配问题
+// 拦截所有请求，代理到 imagefree.net + 注入 CSS
+// Turnstile key 替换为 user's key，API 层自行验证 token
 
 const ORIGIN = 'https://imagefree.net';
-const USER_SITE_KEY = '1x0000000000000000000000000000000AA';
+const USER_SITE_KEY = '0x4AAAAAADuSr57URha6wMyK';
+const USER_SECRET_KEY = '0x4AAAAAADuSr66sbkDHZ4UcCmk3IoyAZpc';
 const ORIG_SITE_KEY = '0x4AAAAAACE-XLGoQUckKKm_';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -32,15 +33,55 @@ export async function onRequest(context) {
   const url = new URL(request.url);
   const path = url.pathname;
 
-  // 首页：让 Pages 静态文件服务处理
+  // ── 首页：让 Pages 静态文件服务处理 ──
   if (path === '/' || path === '/index.html') {
     return context.next();
   }
 
-  // ── API 代理（/api/generate 等）──
+  // ── API 代理 ──
   if (path.startsWith('/api/')) {
-    const apiUrl = ORIGIN + path;
     const method = request.method;
+
+    // 读取请求体
+    let bodyRaw = null;
+    if (method !== 'GET' && method !== 'HEAD') {
+      bodyRaw = await request.text();
+    }
+
+    // 尝试解析 JSON 并验证 Turnstile
+    let bodyObj = null;
+    let turnstileToken = null;
+    if (bodyRaw) {
+      try {
+        bodyObj = JSON.parse(bodyRaw);
+        turnstileToken = bodyObj.turnstile_token;
+      } catch (e) {
+        // 不是 JSON，透传原样
+      }
+    }
+
+    // 如果存在 turnstile_token，我们自己验证
+    if (turnstileToken) {
+      const verifyUrl = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+      const verifyResp = await fetch(verifyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `secret=${USER_SECRET_KEY}&response=${encodeURIComponent(turnstileToken)}`,
+      });
+      const verifyResult = await verifyResp.json();
+      if (!verifyResult.success) {
+        return new Response(JSON.stringify({ error: 'Human verification failed. Please complete the setup or refresh the page to try again.' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        });
+      }
+      // 验证通过，移除 turnstile_token 再转发
+      delete bodyObj.turnstile_token;
+      bodyRaw = JSON.stringify(bodyObj);
+    }
+
+    // 转发到 imagefree.net
+    const apiUrl = ORIGIN + path;
     const hdrs = new Headers(request.headers);
     hdrs.set('User-Agent', UA);
     hdrs.set('Referer', ORIGIN + '/zh');
@@ -50,10 +91,11 @@ export async function onRequest(context) {
     const apiResp = await fetch(apiUrl, {
       method: method,
       headers: hdrs,
-      body: method !== 'GET' && method !== 'HEAD' ? request.body : undefined,
+      body: method !== 'GET' && method !== 'HEAD' ? bodyRaw : undefined,
     });
 
     let apiBody = await apiResp.text();
+    // 也替换 key（API 响应中可能包含）
     apiBody = apiBody.replaceAll(ORIG_SITE_KEY, USER_SITE_KEY);
 
     return new Response(apiBody, {
@@ -64,6 +106,48 @@ export async function onRequest(context) {
       },
     });
   }
+
+  // ── 工具代理 ──
+  if (path.startsWith('/proxy/')) {
+    const toolName = path.slice(7);
+    const targetUrl = TOOLS[toolName];
+    if (!targetUrl) return new Response('Not found', { status: 404 });
+
+    const resp = await fetch(targetUrl, {
+      headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'zh-CN,zh;q=0.9', Referer: ORIGIN + '/zh' },
+    });
+
+    let body = await resp.text();
+    const ct = resp.headers.get('content-type') || '';
+    body = body.replaceAll(ORIG_SITE_KEY, USER_SITE_KEY);
+    if (ct.includes('text/html')) {
+      body = body.replace('</head>', HIDE_CSS + '</head>');
+    }
+
+    return new Response(body, {
+      headers: { 'Content-Type': ct.includes('text/html') ? 'text/html; charset=utf-8' : ct, 'Access-Control-Allow-Origin': '*' },
+    });
+  }
+
+  // ── 静态资源代理 ──
+  const resourceUrl = ORIGIN + path;
+  const res = await fetch(resourceUrl, {
+    headers: { 'User-Agent': UA, Accept: '*/*', Referer: ORIGIN + '/zh' },
+  });
+
+  const ct = res.headers.get('content-type') || '';
+
+  if (ct.includes('javascript') || ct.includes('ecmascript') || path.endsWith('.js')) {
+    let jsBody = await res.text();
+    jsBody = jsBody.replaceAll(ORIG_SITE_KEY, USER_SITE_KEY);
+    return new Response(jsBody, { headers: { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*' } });
+  }
+
+  return new Response(res.body, {
+    status: res.status,
+    headers: { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*' },
+  });
+}
 
   // ── 工具代理 ──
   if (path.startsWith('/proxy/')) {
