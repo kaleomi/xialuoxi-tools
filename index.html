@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>夏洛熙工具集</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f7;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.header{background:#fff;border-bottom:1px solid #e0e0e0;padding:0 20px;flex-shrink:0;display:flex;align-items:center;height:56px}
+.header h1{font-size:18px;font-weight:700;color:#1a1a1a;margin-right:32px;white-space:nowrap}
+.tabs{display:flex;gap:4px;background:#f0f0f0;padding:4px;border-radius:10px}
+.tab{padding:8px 20px;border:none;border-radius:8px;background:transparent;font-size:14px;font-weight:500;color:#555;cursor:pointer;transition:all .2s;white-space:nowrap}
+.tab:hover{color:#1a1a1a;background:rgba(0,0,0,.04)}
+.tab.active{background:#fff;color:#1a1a1a;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.frame-wrap{flex:1;position:relative;overflow:hidden}
+.frame-wrap iframe{width:100%;height:100%;border:none;display:none}
+.frame-wrap iframe.active{display:block}
+.loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#f5f5f7;color:#888;font-size:15px;pointer-events:none;transition:opacity .3s}
+.loading.hide{opacity:0}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🧰 夏洛熙工具集</h1>
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-tool="t2i">🖼️ 文生图</button>
+    <button class="tab" data-tool="rmBg">✂️ 抠图去背景</button>
+    <button class="tab" data-tool="upscaler">🔍 图片高清化</button>
+    <button class="tab" data-tool="editor">🎨 AI 图片编辑</button>
+  </div>
+</div>
+<div class="frame-wrap">
+  <div class="loading" id="loading">加载中...</div>
+  <iframe src="/proxy/t2i" class="active" data-tool="t2i"></iframe>
+  <iframe src="/proxy/rmBg"  data-tool="rmBg"></iframe>
+  <iframe src="/proxy/upscaler" data-tool="upscaler"></iframe>
+  <iframe src="/proxy/editor" data-tool="editor"></iframe>
+</div>
+<script>
+const tabs=document.querySelectorAll('.tab'),frames=document.querySelectorAll('iframe'),loading=document.getElementById('loading');
+let loaded={};
+tabs.forEach(t=>{t.addEventListener('click',()=>{const r=t.dataset.tool;tabs.forEach(e=>e.classList.remove('active')),t.classList.add('active'),frames.forEach(e=>e.classList.remove('active')),document.querySelector('iframe[data-tool="'+r+'"]').classList.add('active'),loaded[r]||loading.classList.remove('hide')})});
+frames.forEach(f=>{f.addEventListener('load',()=>{const r=f.dataset.tool;loaded[r]=true,f.classList.contains('active')&&loading.classList.add('hide')})});
+document.querySelector('iframe.active').addEventListener('load',()=>loading.classList.add('hide'),{once:true});
+setTimeout(()=>loading.classList.add('hide'),3e3);
+</script>
+</body>
+</html>
