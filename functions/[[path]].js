@@ -38,7 +38,7 @@ const INJECT_CSS = `<!-- proxy:imagefree -->
 
 export async function onRequest(context) {
   const { params } = context;
-  const path = params.path || '';
+  const path = Array.isArray(params.path) ? params.path.join('/') : (params.path || '');
 
   // 根路径 → 穿透到 Pages 静态文件服务（自动返回 index.html）
   if (path === '') {
