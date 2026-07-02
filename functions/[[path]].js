@@ -1,10 +1,8 @@
 // 夏洛熙工具集 — Pages Functions 代理
-// 使用 Cloudflare Turnstile 测试密钥 (always pass) 避免密钥不匹配
+// 运行时拦截 Turnstile.render → 强制替换为自己的 site key
 
 const ORIGIN = 'https://imagefree.net';
-const TEST_SITE_KEY = '1x0000000000000000000000000000000AA';
-const ORIG_SITE_KEY = '0x4AAAAAACE-XLGoQUckKKm_';
-
+const USER_SITE_KEY = '0x4AAAAAADuSr57URha6wMyK';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const TOOLS = {
@@ -26,17 +24,21 @@ body{margin:0!important;background:#f5f5f7!important}
 .min-h-screen>section:first-of-type p.text-lg{font-size:.8rem!important;margin-bottom:.5rem!important}
 </style>`;
 
+// 运行时拦截脚本：Object.defineProperty 劫持 window.turnstile.setter
+// 在 Turnstile API 加载设置 window.turnstile 时，自动 patch render 方法
+const PATCH_SCRIPT = '<script>(function(){var _t;Object.defineProperty(window,"turnstile",{configurable:true,enumerable:true,get:function(){return _t},set:function(v){if(v&&typeof v.render==="function"){var r=v.render.bind(v);v.render=function(c,p){if(p&&typeof p==="object"){p.sitekey="' + USER_SITE_KEY + '"}return r(c,p)}}_t=v}})})()<\/script>';
+
 export async function onRequest(context) {
   const { request } = context;
   const url = new URL(request.url);
   const path = url.pathname;
 
-  // 首页：让 Pages 静态文件服务处理
+  // 首页
   if (path === '/' || path === '/index.html') {
     return context.next();
   }
 
-  // ── API 请求：透传（不修改 body）──
+  // API 请求：透传
   if (path.startsWith('/api/')) {
     const apiUrl = ORIGIN + path;
     const method = request.method;
@@ -45,70 +47,45 @@ export async function onRequest(context) {
     hdrs.set('Referer', ORIGIN + '/zh');
     hdrs.set('Origin', ORIGIN);
     hdrs.delete('Host');
-
     const apiResp = await fetch(apiUrl, {
-      method: method,
-      headers: hdrs,
+      method, headers: hdrs,
       body: method !== 'GET' && method !== 'HEAD' ? request.body : undefined,
     });
-
     return new Response(apiResp.body, {
       status: apiResp.status,
-      headers: {
-        'Content-Type': apiResp.headers.get('content-type') || 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: { 'Content-Type': apiResp.headers.get('content-type') || 'application/json', 'Access-Control-Allow-Origin': '*' },
     });
   }
 
-  // ── 工具页面 ──
+  // 工具页面
   if (path.startsWith('/proxy/')) {
     const toolName = path.slice(7);
     const targetUrl = TOOLS[toolName];
     if (!targetUrl) return new Response('Not found', { status: 404 });
 
     const resp = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': UA,
-        Accept: 'text/html,application/xhtml+xml',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
-        Referer: ORIGIN + '/zh',
-      },
+      headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'zh-CN,zh;q=0.9', Referer: ORIGIN + '/zh' },
     });
 
     let body = await resp.text();
     const ct = resp.headers.get('content-type') || '';
 
-    // 替换 site key 为测试密钥
-    body = body.replaceAll(ORIG_SITE_KEY, TEST_SITE_KEY);
-
-    // 注入 CSS 隐藏导航/广告
     if (ct.includes('text/html')) {
-      body = body.replace('</head>', HIDE_CSS + '</head>');
+      // 注入拦截脚本（在 Turnstile API 加载之前执行）
+      body = body.replace('</head>', PATCH_SCRIPT + HIDE_CSS + '</head>');
     }
 
     return new Response(body, {
-      headers: {
-        'Content-Type': ct.includes('text/html') ? 'text/html; charset=utf-8' : ct,
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: { 'Content-Type': ct.includes('text/html') ? 'text/html; charset=utf-8' : ct, 'Access-Control-Allow-Origin': '*' },
     });
   }
 
-  // ── JS 和静态资源 ──
+  // 静态资源代理（直接透传，不需要替换）
   const resourceUrl = ORIGIN + path;
   const res = await fetch(resourceUrl, {
     headers: { 'User-Agent': UA, Accept: '*/*', Referer: ORIGIN + '/zh' },
   });
-
   const ct = res.headers.get('content-type') || '';
-
-  if (ct.includes('javascript') || ct.includes('ecmascript') || path.endsWith('.js')) {
-    let jsBody = await res.text();
-    jsBody = jsBody.replaceAll(ORIG_SITE_KEY, TEST_SITE_KEY);
-    return new Response(jsBody, { headers: { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*' } });
-  }
-
   return new Response(res.body, {
     status: res.status,
     headers: { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*' },
