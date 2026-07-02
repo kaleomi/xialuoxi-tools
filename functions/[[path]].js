@@ -36,8 +36,36 @@ export async function onRequest(context) {
     return context.next();
   }
 
+  // ── API 代理（/api/generate 等）──
+  if (path.startsWith('/api/')) {
+    const apiUrl = ORIGIN + path;
+    const method = request.method;
+    const hdrs = new Headers(request.headers);
+    hdrs.set('User-Agent', UA);
+    hdrs.set('Referer', ORIGIN + '/zh');
+    hdrs.set('Origin', ORIGIN);
+    hdrs.delete('Host');
+
+    const apiResp = await fetch(apiUrl, {
+      method: method,
+      headers: hdrs,
+      body: method !== 'GET' && method !== 'HEAD' ? request.body : undefined,
+    });
+
+    let apiBody = await apiResp.text();
+    // 也替换 Turnstile Token 相关（如果有）
+    apiBody = apiBody.replaceAll(ORIG_SITE_KEY, USER_SITE_KEY);
+
+    return new Response(apiBody, {
+      status: apiResp.status,
+      headers: {
+        'Content-Type': apiResp.headers.get('content-type') || 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  }
+
   // ── 工具代理 ──
-  if (path.startsWith('/proxy/')) {
     const toolName = path.slice(7);
     const targetUrl = TOOLS[toolName];
     if (!targetUrl) return new Response('Not found', { status: 404 });
