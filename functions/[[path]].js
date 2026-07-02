@@ -1,4 +1,4 @@
-// Cloudflare Pages Function — 代理 imagefree.net 页面并注入 CSS 隐藏多余元素
+// Cloudflare Pages Function — 代理 imagefree.net 页面并注入 CSS
 const ORIGIN = 'https://imagefree.net';
 
 const TOOLS = {
@@ -8,7 +8,13 @@ const TOOLS = {
   editor:   'https://imagefree.net/zh/ai-photo-editor',
 };
 
-// ── 注入的 CSS：隐藏导航、页脚、广告等，只保留第一个 section ──
+const REQ_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept-Language': 'zh-CN,zh;q=0.9',
+  Referer: ORIGIN + '/zh',
+};
+
+// ── 隐藏导航、广告等 ──
 const INJECT_CSS = `<!-- proxy:imagefree -->
 <style>
   nav { display: none !important; }
@@ -31,25 +37,28 @@ const INJECT_CSS = `<!-- proxy:imagefree -->
 </style>`;
 
 export async function onRequest(context) {
-  const { request, params } = context;
+  const { params } = context;
   const path = params.path || '';
-  const url = new URL(request.url);
 
-  // ── 1. 工具页面代理 ──
-  if (path in TOOLS) {
-    const targetUrl = TOOLS[path];
+  // 根路径 → 404，让 Pages 静态文件（index.html）接管
+  if (path === '') {
+    return new Response(null, { status: 404 });
+  }
+
+  // ── 1. 工具页面代理：/proxy/t2i, /proxy/rmBg 等 ──
+  if (path.startsWith('proxy/')) {
+    const toolName = path.slice(6); // 去掉 "proxy/"
+    const targetUrl = TOOLS[toolName];
+    if (!targetUrl) {
+      return new Response('Tool not found', { status: 404 });
+    }
+
     const response = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
-        Referer: ORIGIN + '/zh',
-      },
+      headers: { ...REQ_HEADERS, Accept: 'text/html,application/xhtml+xml' },
     });
 
     const contentType = response.headers.get('content-type') || '';
 
-    // 非 HTML 直接透传
     if (!contentType.includes('text/html')) {
       return new Response(response.body, {
         status: response.status,
@@ -57,7 +66,6 @@ export async function onRequest(context) {
       });
     }
 
-    // HTML：注入 CSS
     let html = await response.text();
     html = html.replace('</head>', INJECT_CSS + '</head>');
 
@@ -67,15 +75,10 @@ export async function onRequest(context) {
     });
   }
 
-  // ── 2. 静态资源代理（/_next/static/*, /favicon.ico 等） ──
+  // ── 2. 静态资源代理（_next/static/*, favicon.ico 等） ──
   const resourceUrl = ORIGIN + '/' + path;
   const res = await fetch(resourceUrl, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      Accept: '*/*',
-      'Accept-Language': 'zh-CN,zh;q=0.9',
-      Referer: ORIGIN + '/zh',
-    },
+    headers: { ...REQ_HEADERS, Accept: '*/*' },
   });
 
   const contentType = res.headers.get('content-type') || 'application/octet-stream';
