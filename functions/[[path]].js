@@ -53,7 +53,6 @@ export async function onRequest(context) {
     });
 
     let apiBody = await apiResp.text();
-    // 也替换 Turnstile Token 相关（如果有）
     apiBody = apiBody.replaceAll(ORIG_SITE_KEY, USER_SITE_KEY);
 
     return new Response(apiBody, {
@@ -66,6 +65,7 @@ export async function onRequest(context) {
   }
 
   // ── 工具代理 ──
+  if (path.startsWith('/proxy/')) {
     const toolName = path.slice(7);
     const targetUrl = TOOLS[toolName];
     if (!targetUrl) return new Response('Not found', { status: 404 });
@@ -82,10 +82,10 @@ export async function onRequest(context) {
     let body = await resp.text();
     const ct = resp.headers.get('content-type') || '';
 
-    // 替换 Turnstile Site Key（在 HTML 和 JS 中都生效）
+    // 替换 Turnstile Site Key
     body = body.replaceAll(ORIG_SITE_KEY, USER_SITE_KEY);
 
-    // 注入 CSS 隐藏导航/广告（仅 HTML）
+    // 注入 CSS 隐藏导航/广告
     if (ct.includes('text/html')) {
       body = body.replace('</head>', HIDE_CSS + '</head>');
     }
@@ -98,7 +98,7 @@ export async function onRequest(context) {
     });
   }
 
-  // ── 静态资源（_next/static, favicon 等）直接从 imagefree.net 代理 ──
+  // ── 静态资源代理 ──
   const resourceUrl = ORIGIN + path;
   const res = await fetch(resourceUrl, {
     headers: {
@@ -110,7 +110,7 @@ export async function onRequest(context) {
 
   const ct = res.headers.get('content-type') || '';
 
-  // 如果是 JS 文件，也要替换 Turnstile Key
+  // JS 文件也要替换 Turnstile Key
   if (ct.includes('javascript') || ct.includes('ecmascript') || path.endsWith('.js')) {
     let jsBody = await res.text();
     jsBody = jsBody.replaceAll(ORIG_SITE_KEY, USER_SITE_KEY);
